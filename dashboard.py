@@ -195,7 +195,7 @@ if conn:
     df_snap = load_snapshots(conn)
     df_today = load_today_markets(conn)
     df_arb = load_arbitrage(conn)
-    USE_DEMO = df_snap.empty and df_today.empty
+    USE_DEMO = df_snap.empty or df_today.empty or "platform" not in df_today.columns
     if USE_DEMO:
         st.info("Database is empty — showing demo data until fetcher populates it.")
         df_snap = _demo_markets().assign(snapshot_date=pd.Timestamp(date.today()))
