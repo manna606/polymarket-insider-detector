@@ -18,9 +18,65 @@ Dependencies: requests
 ============================================================
 """
 
+import os
 import requests
 import time
 from typing import Optional, Dict, List
+
+SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL", "")
+
+
+def send_slack_alert(high_wallets: List[dict], total_analyzed: int, markets_count: int) -> None:
+    """Send a formatted Slack alert when HIGH-suspicion wallets are detected."""
+    if not SLACK_WEBHOOK_URL:
+        print("   [Slack] SLACK_WEBHOOK_URL not set, skipping alert.")
+        return
+
+    blocks = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": f"🚨 Polymarket Insider Alert — {len(high_wallets)} HIGH wallet(s) detected",
+                "emoji": True,
+            },
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"Analyzed *{total_analyzed}* whales across *{markets_count}* active markets.",
+            },
+        },
+        {"type": "divider"},
+    ]
+
+    for r in high_wallets[:5]:
+        flag_text = " • ".join(r["flags"]) if r["flags"] else "None"
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        f"*Score: {r['score']}/100* — `{r['pseudonym']}`\n"
+                        f"Market: {r['market'][:60]}\n"
+                        f"Bet: ${r['target_volume']:,.0f} → *{r['dominant_outcome']}*\n"
+                        f"Age: {r['account_age_days']:.0f}d | Trades: {r['total_trades']}\n"
+                        f"Flags: {flag_text}"
+                    ),
+                },
+            }
+        )
+        blocks.append({"type": "divider"})
+
+    payload = {"blocks": blocks}
+    try:
+        resp = requests.post(SLACK_WEBHOOK_URL, json=payload, timeout=10)
+        resp.raise_for_status()
+        print("   [Slack] Alert sent successfully.")
+    except Exception as e:
+        print(f"   [Slack] Failed to send alert: {e}")
 
 GAMMA_API = "https://gamma-api.polymarket.com"
 DATA_API = "https://data-api.polymarket.com"
@@ -317,6 +373,13 @@ def run_analysis():
         print(f"      Bet:       ${r['target_volume']:,.0f} -> {r['dominant_outcome']}")
         print(f"      Age:       {r['account_age_days']:.0f}d  Trades: {r['total_trades']}")
         print(f"      Flags:     {', '.join(r['flags']) if r['flags'] else 'None'}")
+
+    # ---- Slack alert ----
+    high_wallets = tiers.get("HIGH", [])
+    if high_wallets:
+        send_slack_alert(high_wallets, len(records), len(markets))
+    else:
+        print("\n  [Slack] No HIGH wallets today, no alert sent.")
 
     print("\n" + "=" * 72)
     print(f"  Done. Profiled {len(records)} whales across {len(markets)} active markets.")
