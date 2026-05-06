@@ -17,24 +17,7 @@ import json
 from datetime import date, timedelta
 from typing import Optional, List, Dict
 
-try:
-    import psycopg2
-    HAS_DB = True
-except ImportError:
-    HAS_DB = False
-
-
-def get_db_conn():
-    if not HAS_DB:
-        return None
-    url = os.environ.get("DATABASE_URL")
-    if not url:
-        return None
-    try:
-        return psycopg2.connect(url)
-    except Exception as e:
-        print(f"[DB] Connection failed: {e}")
-        return None
+from local_db import get_db_conn
 
 
 def test_calibration(conn) -> None:
@@ -99,6 +82,9 @@ def test_volume_momentum(conn) -> None:
         print("   Skipped — no database connection.")
         return
 
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+
     cur = conn.cursor()
     cur.execute(
         """
@@ -110,12 +96,13 @@ def test_volume_momentum(conn) -> None:
         FROM price_snapshots s1
         JOIN price_snapshots s2
           ON s1.market_id = s2.market_id
-          AND s2.snapshot_date = s1.snapshot_date - INTERVAL '1 day'
+          AND s2.snapshot_date = %s
         JOIN markets m ON m.id = s1.market_id
-        WHERE s1.snapshot_date = CURRENT_DATE
+        WHERE s1.snapshot_date = %s
         ORDER BY (s1.volume - s2.volume) DESC
         LIMIT 10
-        """
+        """,
+        (yesterday, today),
     )
     rows = cur.fetchall()
     cur.close()
@@ -228,8 +215,7 @@ def run_alpha_tests():
 
     conn = get_db_conn()
     if not conn:
-        print("\n[WARN] DATABASE_URL not set. Running in dry-run mode.")
-        print("       Set DATABASE_URL to run full validation.")
+        print("\n[WARN] Could not connect to database. Running in dry-run mode.")
 
     test_calibration(conn)
     test_volume_momentum(conn)

@@ -26,13 +26,13 @@ from typing import Optional, List, Dict
 
 import requests
 
-# Database (optional — falls back to stdout if unavailable)
+from local_db import get_db_conn, is_sqlite, sql_for_conn
+
+# psycopg2 execute_values is used only for PostgreSQL bulk inserts
 try:
-    import psycopg2
     from psycopg2.extras import execute_values
-    HAS_DB = True
 except ImportError:
-    HAS_DB = False
+    execute_values = None
 
 GAMMA_API = "https://gamma-api.polymarket.com"
 DATA_API = "https://data-api.polymarket.com"
@@ -42,31 +42,19 @@ REQUEST_DELAY = 0.2
 EQUITY_KEYWORDS = ["spy", "spx", "qqq", "s&p", "nasdaq", "sp500", "index"]
 
 
-def get_db_conn():
-    if not HAS_DB:
-        return None
-    url = os.environ.get("DATABASE_URL")
-    if not url:
-        return None
-    try:
-        return psycopg2.connect(url)
-    except Exception as e:
-        print(f"[DB] Connection failed: {e}")
-        return None
-
-
 def upsert_market(conn, platform: str, data: dict) -> Optional[int]:
     """Insert or update a market row, return market_id."""
     if not conn:
         return None
     cur = conn.cursor()
+    from datetime import datetime
+    now = datetime.now()
     try:
-        cur.execute(
-            """
+        sql = sql_for_conn("""
             INSERT INTO markets (platform, external_id, slug, question, category,
                                  outcomes, outcome_prices, volume, liquidity, active, closed,
                                  end_date, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (platform, external_id)
             DO UPDATE SET
                 question = EXCLUDED.question,
@@ -78,9 +66,11 @@ def upsert_market(conn, platform: str, data: dict) -> Optional[int]:
                 active = EXCLUDED.active,
                 closed = EXCLUDED.closed,
                 end_date = EXCLUDED.end_date,
-                updated_at = NOW()
+                updated_at = %s
             RETURNING id
-            """,
+        """, conn)
+        cur.execute(
+            sql,
             (
                 platform,
                 data["external_id"],
@@ -94,6 +84,8 @@ def upsert_market(conn, platform: str, data: dict) -> Optional[int]:
                 data.get("active", True),
                 data.get("closed", False),
                 data.get("end_date"),
+                now,
+                now,
             ),
         )
         market_id = cur.fetchone()[0]
@@ -112,8 +104,7 @@ def insert_snapshot(conn, market_id: int, snapshot: dict):
         return
     cur = conn.cursor()
     try:
-        cur.execute(
-            """
+        sql = sql_for_conn("""
             INSERT INTO price_snapshots (market_id, snapshot_date, outcome_prices,
                                          volume, open_interest, spread, best_bid, best_ask)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
@@ -125,7 +116,9 @@ def insert_snapshot(conn, market_id: int, snapshot: dict):
                 spread = EXCLUDED.spread,
                 best_bid = EXCLUDED.best_bid,
                 best_ask = EXCLUDED.best_ask
-            """,
+        """, conn)
+        cur.execute(
+            sql,
             (
                 market_id,
                 snapshot["date"],
@@ -166,18 +159,29 @@ def insert_trades(conn, market_id: int, trades: List[dict]):
             )
             for t in trades
         ]
-        execute_values(
-            cur,
+        if is_sqlite(conn):
+            sql = """
+                INSERT OR IGNORE INTO trades (platform, market_id, external_trade_id, wallet,
+                                    pseudonym, side, outcome, size, price, usdc_amount, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
-            INSERT INTO trades (platform, market_id, external_trade_id, wallet,
-                                pseudonym, side, outcome, size, price, usdc_amount, timestamp)
-            VALUES %s
-            ON CONFLICT (platform, external_trade_id)
-            DO NOTHING
-            """,
-            vals,
-            template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        )
+            cur.executemany(sql, vals)
+        else:
+            if execute_values:
+                execute_values(
+                    cur,
+                    """
+                    INSERT INTO trades (platform, market_id, external_trade_id, wallet,
+                                        pseudonym, side, outcome, size, price, usdc_amount, timestamp)
+                    VALUES %s
+                    ON CONFLICT (platform, external_trade_id)
+                    DO NOTHING
+                    """,
+                    vals,
+                    template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                )
+            else:
+                print("[DB] psycopg2 not available, skipping bulk trade insert.")
         conn.commit()
         print(f"   [DB] Inserted/ignored {len(vals)} trades")
     except Exception as e:
@@ -405,8 +409,10 @@ def run_fetcher():
 
     today = date.today()
     conn = get_db_conn()
-    if not conn:
-        print("[WARN] No DATABASE_URL — running in dry-run mode (prints only).")
+    if is_sqlite(conn):
+        print("[INFO] Using local SQLite database (polymarket_data.db).")
+    else:
+        print("[INFO] Using PostgreSQL database.")
 
     # ---- 1) SPY / SPX / QQQ markets ----
     print("\n[1/4] Fetching equity index markets (SPY, SPX, QQQ)...")

@@ -26,26 +26,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-# ------------------------------------------------------------------
-# Database helpers (best-effort)
-# ------------------------------------------------------------------
-try:
-    import psycopg2
-    HAS_DB = True
-except ImportError:
-    HAS_DB = False
-
-
-def get_db_conn():
-    if not HAS_DB:
-        return None
-    url = os.environ.get("DATABASE_URL")
-    if not url:
-        return None
-    try:
-        return psycopg2.connect(url)
-    except Exception:
-        return None
+from local_db import get_db_conn, is_sqlite
 
 
 # ------------------------------------------------------------------
@@ -170,20 +151,20 @@ st.caption("Daily prediction-market data for alpha validation.")
 # ------------------------------------------------------------------
 conn = get_db_conn()
 if conn:
-    st.success("Connected to PostgreSQL.")
+    db_kind = "SQLite (local)" if is_sqlite(conn) else "PostgreSQL"
+    st.success(f"Connected to {db_kind} database.")
     df_snap = load_snapshots(conn)
     df_arb = load_arbitrage(conn)
     USE_DEMO = df_snap.empty
+    if USE_DEMO:
+        st.info("Database is empty — showing demo data until fetcher populates it.")
+        df_snap = _demo_snapshots()
+        df_arb = _demo_arb()
 else:
-    st.warning("DATABASE_URL not set — showing demo data.")
+    st.error("Could not connect to any database.")
     df_snap = _demo_snapshots()
     df_arb = _demo_arb()
     USE_DEMO = True
-
-if USE_DEMO and conn:
-    st.info("Database is empty — falling back to demo data until fetcher populates it.")
-    df_snap = _demo_snapshots()
-    df_arb = _demo_arb()
 
 # ------------------------------------------------------------------
 # KPI Cards
