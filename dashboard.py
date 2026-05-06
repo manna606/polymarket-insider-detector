@@ -1,14 +1,8 @@
 """
-Polymarket + Kalshi Alpha Dashboard
+Polymarket + Kalshi Alpha Dashboard — Premium AI Edition
 ============================================================
-Interactive Streamlit dashboard for visualising:
-  - Daily price snapshots
-  - Volume trends
-  - Cross-market arbitrage opportunities
-  - Whale concentration
-
-Usage (local):
-    streamlit run dashboard.py
+Dark-themed, terminal-inspired interface for institutional-grade
+prediction market analytics.
 ============================================================
 """
 
@@ -16,52 +10,171 @@ import os
 import json
 import random
 from datetime import date, timedelta
-from typing import Optional, List, Dict
+from typing import List
 
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 
 from local_db import get_db_conn, is_sqlite
 
 # ------------------------------------------------------------------
-# Category descriptions
+# Page Config & Global Dark Theme
 # ------------------------------------------------------------------
-CATEGORY_INFO = {
-    "Politics": {"emoji": "🏛️", "desc": "Political events, elections, government actions"},
-    "Elections": {"emoji": "🗳️", "desc": "Voting outcomes and electoral predictions"},
-    "Economics": {"emoji": "📊", "desc": "Fed policy, jobs, GDP, markets"},
-    "World": {"emoji": "🌍", "desc": "International affairs and geopolitics"},
-    "Financials": {"emoji": "💰", "desc": "Stocks, indices, financial instruments"},
-    "Companies": {"emoji": "🏢", "desc": "Corporate events, IPOs, M&A"},
-    "Entertainment": {"emoji": "🎬", "desc": "Celebrity, music, movies, pop culture"},
-    "Sports": {"emoji": "⚽", "desc": "Games, championships, athlete performance"},
-    "Crypto": {"emoji": "₿", "desc": "Bitcoin, Ethereum, digital assets"},
-    "Climate and Weather": {"emoji": "🌡️", "desc": "Temperature, disasters"},
-    "Science and Technology": {"emoji": "🔬", "desc": "AI, space, tech breakthroughs"},
-    "Social": {"emoji": "👥", "desc": "Social trends and culture"},
-    "Health": {"emoji": "🏥", "desc": "Pandemics, vaccines, medicine"},
-    "Transportation": {"emoji": "✈️", "desc": "Airlines, EVs, infrastructure"},
-    "Equity": {"emoji": "📈", "desc": "Stock index predictions (SPY, SPX, QQQ)"},
+st.set_page_config(
+    page_title="Alpha Terminal",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+# Dark theme CSS injection
+st.markdown("""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@300;400;600;800&display=swap');
+
+    :root {
+        --bg-primary: #0a0e1a;
+        --bg-card: #111827;
+        --bg-elevated: #1a2236;
+        --border: #1f2937;
+        --text-primary: #f3f4f6;
+        --text-secondary: #9ca3af;
+        --accent-cyan: #06b6d4;
+        --accent-purple: #8b5cf6;
+        --accent-green: #10b981;
+        --accent-red: #ef4444;
+        --accent-orange: #f59e0b;
+    }
+
+    .stApp {
+        background-color: var(--bg-primary) !important;
+        font-family: 'Inter', sans-serif !important;
+    }
+
+    h1, h2, h3, h4 {
+        font-family: 'Inter', sans-serif !important;
+        color: var(--text-primary) !important;
+        letter-spacing: -0.02em;
+    }
+
+    /* Custom metric cards */
+    div[data-testid="metric-container"] {
+        background: linear-gradient(145deg, var(--bg-card), var(--bg-elevated)) !important;
+        border: 1px solid var(--border) !important;
+        border-radius: 12px !important;
+        padding: 16px !important;
+        box-shadow: 0 4px 6px -1px rgba(0,0,0,0.3) !important;
+    }
+
+    div[data-testid="metric-container"] > div {
+        color: var(--text-secondary) !important;
+    }
+
+    div[data-testid="metric-container"] > div > div {
+        color: var(--accent-cyan) !important;
+        font-family: 'JetBrains Mono', monospace !important;
+        font-weight: 700 !important;
+    }
+
+    /* Tabs styling */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        background: transparent !important;
+    }
+
+    .stTabs [data-baseweb="tab"] {
+        background: var(--bg-card) !important;
+        border: 1px solid var(--border) !important;
+        border-radius: 8px 8px 0 0 !important;
+        color: var(--text-secondary) !important;
+        font-weight: 600 !important;
+        padding: 12px 24px !important;
+        transition: all 0.2s ease;
+    }
+
+    .stTabs [data-baseweb="tab"][aria-selected="true"] {
+        background: linear-gradient(90deg, var(--accent-purple), var(--accent-cyan)) !important;
+        color: white !important;
+        border: none !important;
+        box-shadow: 0 0 20px rgba(139, 92, 246, 0.3) !important;
+    }
+
+    .stTabs [data-baseweb="tab-panel"] {
+        background: var(--bg-card) !important;
+        border: 1px solid var(--border) !important;
+        border-radius: 0 12px 12px 12px !important;
+        padding: 24px !important;
+    }
+
+    /* Info/Warning/Success boxes */
+    .stAlert {
+        background: var(--bg-elevated) !important;
+        border: 1px solid var(--border) !important;
+        border-radius: 8px !important;
+    }
+
+    /* Dataframes */
+    .stDataFrame {
+        border: 1px solid var(--border) !important;
+        border-radius: 8px !important;
+    }
+
+    /* Expander */
+    .streamlit-expanderHeader {
+        background: var(--bg-elevated) !important;
+        border-radius: 8px !important;
+        color: var(--text-primary) !important;
+    }
+
+    /* Divider */
+    hr {
+        border-color: var(--border) !important;
+        opacity: 0.5 !important;
+    }
+
+    /* Caption */
+    .stCaption {
+        color: var(--text-secondary) !important;
+        font-size: 0.85rem !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ------------------------------------------------------------------
+# Category Theme Map
+# ------------------------------------------------------------------
+CATEGORY_THEME = {
+    "Politics": {"icon": "🏛️", "color": "#8b5cf6", "desc": "Political events & elections"},
+    "Elections": {"icon": "🗳️", "color": "#a78bfa", "desc": "Electoral outcomes"},
+    "Economics": {"icon": "📊", "color": "#10b981", "desc": "Markets, Fed, GDP"},
+    "World": {"icon": "🌍", "color": "#06b6d4", "desc": "Geopolitical events"},
+    "Financials": {"icon": "💰", "color": "#f59e0b", "desc": "Stocks & indices"},
+    "Companies": {"icon": "🏢", "color": "#3b82f6", "desc": "Corporate events"},
+    "Entertainment": {"icon": "🎬", "color": "#ec4899", "desc": "Pop culture"},
+    "Sports": {"icon": "⚽", "color": "#f97316", "desc": "Athletic events"},
+    "Crypto": {"icon": "₿", "color": "#fbbf24", "desc": "Digital assets"},
+    "Climate and Weather": {"icon": "🌡️", "color": "#ef4444", "desc": "Environmental"},
+    "Science and Technology": {"icon": "🔬", "color": "#06b6d4", "desc": "Tech & science"},
+    "Social": {"icon": "👥", "color": "#8b5cf6", "desc": "Social trends"},
+    "Health": {"icon": "🏥", "color": "#ef4444", "desc": "Medical events"},
+    "Transportation": {"icon": "✈️", "color": "#3b82f6", "desc": "Infrastructure"},
+    "Equity": {"icon": "📈", "color": "#10b981", "desc": "Stock predictions"},
 }
 
 
-def get_category_badge(category: str) -> str:
-    info = CATEGORY_INFO.get(category, {"emoji": "📌", "desc": "General"})
-    return f"{info['emoji']} **{category}**"
+def get_cat_badge(cat: str) -> str:
+    theme = CATEGORY_THEME.get(cat, {"icon": "📌", "color": "#9ca3af", "desc": "General"})
+    return f"<span style='color:{theme['color']}; font-weight:600;'>\n        {theme['icon']} {cat}\n    </span>"
 
 
 # ------------------------------------------------------------------
-# Demo data
+# Demo Data
 # ------------------------------------------------------------------
-def _demo_dates(days: int = 14) -> List[date]:
-    today = date.today()
-    return [today - timedelta(days=i) for i in range(days, 0, -1)]
-
-
-def _demo_markets() -> pd.DataFrame:
-    markets = [
+def _demo_df() -> pd.DataFrame:
+    return pd.DataFrame([
         {"id": 1, "platform": "polymarket", "question": "Will Jesus Christ return before GTA VI?", "category": "Entertainment", "volume": 11208259, "yes_price": 0.02},
         {"id": 2, "platform": "polymarket", "question": "Russia-Ukraine Ceasefire before GTA VI?", "category": "World", "volume": 1655969, "yes_price": 0.35},
         {"id": 3, "platform": "polymarket", "question": "New Playboi Carti Album before GTA VI?", "category": "Entertainment", "volume": 732298, "yes_price": 0.48},
@@ -72,105 +185,75 @@ def _demo_markets() -> pd.DataFrame:
         {"id": 8, "platform": "kalshi", "question": "Will Trump be impeached and removed from office?", "category": "Politics", "volume": 446681, "yes_price": 0.25},
         {"id": 9, "platform": "kalshi", "question": "Will US acquire any new territory?", "category": "Politics", "volume": 304042, "yes_price": 0.30},
         {"id": 10, "platform": "kalshi", "question": "Will Trump resign during his term?", "category": "Politics", "volume": 196763, "yes_price": 0.25},
-    ]
-    return pd.DataFrame(markets)
-
-
-def _demo_arb() -> pd.DataFrame:
-    return pd.DataFrame([
-        {"event_name": "Trump out as President before GTA VI?", "poly_price": 0.52, "kalshi_price": 0.25, "spread": 0.27, "category": "Politics"},
-    ])
-
-
-def _demo_whales() -> pd.DataFrame:
-    return pd.DataFrame([
-        {"question": "Will Jesus Christ return before GTA VI?", "top5_pct": 82.5, "total_vol": 5800000},
-        {"question": "Trump out as President before GTA VI?", "top5_pct": 45.0, "total_vol": 1450000},
     ])
 
 
 # ------------------------------------------------------------------
-# Data loaders
+# Data Loaders
 # ------------------------------------------------------------------
+def load_markets(conn) -> pd.DataFrame:
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT m.id, m.platform, m.question, m.category, m.volume,
+               m.outcome_prices, m.end_date
+        FROM markets m
+        ORDER BY m.volume DESC
+    """)
+    rows = cur.fetchall()
+    cur.close()
+
+    data = []
+    for mid, platform, question, category, volume, prices_json, end_date in rows:
+        try:
+            prices = json.loads(prices_json) if prices_json else []
+            yes_price = float(prices[0]) if prices else 0
+        except Exception:
+            yes_price = 0
+        data.append({
+            "id": mid, "platform": platform, "question": question,
+            "category": category or "Other", "volume": float(volume or 0),
+            "yes_price": yes_price, "end_date": end_date,
+        })
+    return pd.DataFrame(data)
+
+
 def load_snapshots(conn) -> pd.DataFrame:
     cur = conn.cursor()
-    cur.execute(
-        """
+    cur.execute("""
         SELECT s.market_id, s.snapshot_date, s.outcome_prices, s.volume,
                m.platform, m.question, m.category
         FROM price_snapshots s
         JOIN markets m ON m.id = s.market_id
         ORDER BY s.snapshot_date
-        """
-    )
+    """)
     rows = cur.fetchall()
     cur.close()
 
     data = []
     for market_id, snap_date, prices_json, volume, platform, question, category in rows:
         try:
-            prices = prices_json if isinstance(prices_json, list) else json.loads(prices_json)
+            prices = json.loads(prices_json) if prices_json else []
             yes_price = float(prices[0]) if prices else 0
         except Exception:
             yes_price = 0
         data.append({
-            "market_id": market_id,
-            "snapshot_date": pd.to_datetime(snap_date),
-            "yes_price": yes_price,
-            "volume": float(volume or 0),
-            "platform": platform,
-            "question": question,
+            "market_id": market_id, "snapshot_date": pd.to_datetime(snap_date),
+            "yes_price": yes_price, "volume": float(volume or 0),
+            "platform": platform, "question": question,
             "category": category or "Other",
         })
     return pd.DataFrame(data)
 
 
-def load_today_markets(conn) -> pd.DataFrame:
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT m.id, m.platform, m.question, m.category, m.volume, m.liquidity,
-               m.outcome_prices, m.end_date
-        FROM markets m
-        WHERE m.updated_at >= date('now')
-           OR m.id IN (SELECT market_id FROM price_snapshots WHERE snapshot_date = date('now'))
-        ORDER BY m.volume DESC
-        """
-    )
-    rows = cur.fetchall()
-    cur.close()
-
-    data = []
-    for mid, platform, question, category, volume, liquidity, prices_json, end_date in rows:
-        try:
-            prices = prices_json if isinstance(prices_json, list) else json.loads(prices_json)
-            yes_price = float(prices[0]) if prices else 0
-        except Exception:
-            yes_price = 0
-        data.append({
-            "id": mid,
-            "platform": platform,
-            "question": question,
-            "category": category or "Other",
-            "volume": float(volume or 0),
-            "liquidity": float(liquidity or 0),
-            "yes_price": yes_price,
-            "end_date": end_date,
-        })
-    return pd.DataFrame(data)
-
-
-def load_arbitrage(conn) -> pd.DataFrame:
+def load_arb(conn) -> pd.DataFrame:
     cur = conn.cursor()
     try:
-        cur.execute(
-            """
+        cur.execute("""
             SELECT event_name, poly_price_yes, kalshi_price_yes, spread
             FROM arbitrage_opps
             WHERE snapshot_date = date('now')
             ORDER BY spread DESC
-            """
-        )
+        """)
         rows = cur.fetchall()
         cur.close()
         return pd.DataFrame(rows, columns=["event_name", "poly_price", "kalshi_price", "spread"])
@@ -180,256 +263,295 @@ def load_arbitrage(conn) -> pd.DataFrame:
 
 
 # ------------------------------------------------------------------
-# UI
+# Header
 # ------------------------------------------------------------------
-st.set_page_config(page_title="Alpha Dashboard", layout="wide")
-
-st.title("Polymarket + Kalshi Alpha Dashboard")
-st.caption("Daily prediction-market data for alpha validation")
-
-# ------------------------------------------------------------------
-# Load data
-# ------------------------------------------------------------------
-conn = get_db_conn()
-if conn:
-    df_snap = load_snapshots(conn)
-    df_today = load_today_markets(conn)
-    df_arb = load_arbitrage(conn)
-    USE_DEMO = df_snap.empty or df_today.empty or "platform" not in df_today.columns
-    if USE_DEMO:
-        st.info("Database is empty — showing demo data until fetcher populates it.")
-        df_snap = _demo_markets().assign(snapshot_date=pd.Timestamp(date.today()))
-        df_today = _demo_markets()
-        df_arb = _demo_arb()
-else:
-    st.error("Could not connect to any database.")
-    df_snap = _demo_markets().assign(snapshot_date=pd.Timestamp(date.today()))
-    df_today = _demo_markets()
-    df_arb = _demo_arb()
-    USE_DEMO = True
-
-# ------------------------------------------------------------------
-# KPI Row
-# ------------------------------------------------------------------
-ck1, ck2, ck3, ck4, ck5 = st.columns(5)
-with ck1:
-    st.metric("Markets Tracked", len(df_today))
-with ck2:
-    poly_vol = df_snap[df_snap["platform"] == "polymarket"]["volume"].sum()
-    st.metric("Polymarket Vol", f"${poly_vol/1e6:.1f}M" if poly_vol >= 1e6 else f"${poly_vol:,.0f}")
-with ck3:
-    kal_vol = df_snap[df_snap["platform"] == "kalshi"]["volume"].sum()
-    st.metric("Kalshi Vol", f"${kal_vol/1e6:.1f}M" if kal_vol >= 1e6 else f"${kal_vol:,.0f}")
-with ck4:
-    st.metric("Arb Signals", len(df_arb))
-with ck5:
-    st.metric("Data Date", str(date.today()))
+col_logo, col_title = st.columns([0.15, 0.85])
+with col_logo:
+    st.markdown("<div style='font-size:3rem; text-align:center;'>⚡</div>", unsafe_allow_html=True)
+with col_title:
+    st.markdown("""
+        <h1 style='margin:0; font-weight:800; background: linear-gradient(90deg, #06b6d4, #8b5cf6);
+        -webkit-background-clip: text; -webkit-text-fill-color: transparent;'>
+            Alpha Terminal
+        </h1>
+        <p style='margin:0; color:#6b7280; font-size:1rem; font-weight:300;'>
+            Polymarket + Kalshi Intelligence Layer
+        </p>
+    """, unsafe_allow_html=True)
 
 st.divider()
 
 # ------------------------------------------------------------------
-# Platform Tabs
+# Load Data
+# ------------------------------------------------------------------
+conn = get_db_conn()
+if conn:
+    df_markets = load_markets(conn)
+    df_snap = load_snapshots(conn)
+    df_arb = load_arb(conn)
+    USE_DEMO = df_markets.empty
+    if USE_DEMO:
+        st.info("🔗 Connected to Railway DB — populating with demo data until fetcher runs.")
+        df_markets = _demo_df()
+        df_snap = _demo_df().assign(snapshot_date=pd.Timestamp(date.today()))
+else:
+    st.warning("🔌 Database offline — showing demo data.")
+    df_markets = _demo_df()
+    df_snap = _demo_df().assign(snapshot_date=pd.Timestamp(date.today()))
+    df_arb = pd.DataFrame()
+    USE_DEMO = True
+
+# ------------------------------------------------------------------
+# KPI Cards
+# ------------------------------------------------------------------
+st.markdown("<h3 style='color:#9ca3af; font-weight:600; margin-bottom:1rem;'>📊 MARKET PULSE</h3>", unsafe_allow_html=True)
+
+k1, k2, k3, k4 = st.columns(4)
+with k1:
+    poly_vol = df_snap[df_snap["platform"] == "polymarket"]["volume"].sum()
+    st.metric("Polymarket Vol", f"${poly_vol/1e6:.1f}M" if poly_vol else "$0")
+with k2:
+    kal_vol = df_snap[df_snap["platform"] == "kalshi"]["volume"].sum()
+    st.metric("Kalshi Vol", f"${kal_vol/1e6:.1f}M" if kal_vol else "$0")
+with k3:
+    st.metric("Active Markets", len(df_markets))
+with k4:
+    st.metric("Arb Signals", len(df_arb))
+
+st.divider()
+
+# ------------------------------------------------------------------
+# Tabs
 # ------------------------------------------------------------------
 tab_poly, tab_kalshi, tab_arb, tab_insights = st.tabs([
-    "🟣 Polymarket",
-    "🔵 Kalshi",
-    "⚡ Arbitrage Radar",
-    "📊 Market Insights"
+    "🟣  Polymarket", "🔵  Kalshi", "⚡  Arbitrage", "📈  Insights"
 ])
 
-# ---------- Polymarket Tab ----------
+# ---------- Polymarket ----------
 with tab_poly:
-    st.header("Polymarket — Crypto-based Prediction Market")
-    st.caption("Higher volume, broader topics, global audience")
+    st.markdown("<h2 style='color:#8b5cf6;'>Polymarket</h2>", unsafe_allow_html=True)
+    st.caption("Crypto-native. Higher volume. Global liquidity.")
 
-    poly_df = df_today[df_today["platform"] == "polymarket"].sort_values("volume", ascending=False)
-
-    if not poly_df.empty:
-        # Market cards
-        for _, row in poly_df.iterrows():
-            price = row['yes_price']
-            price_color = "#2ca02c" if price > 0.6 else "#ff7f0e" if price > 0.4 else "#d62728"
-            vol_str = f"${row['volume']/1e6:.2f}M" if row['volume'] >= 1e6 else f"${row['volume']:,.0f}"
-
-            with st.container():
-                c1, c2, c3 = st.columns([4, 1.5, 1.5])
-                with c1:
-                    st.markdown(f"**{row['question'][:70]}**")
-                    st.caption(get_category_badge(row['category']))
-                with c2:
-                    st.markdown(f"<span style='color:{price_color};font-size:1.4rem;font-weight:bold;'>{price:.0%}</span>", unsafe_allow_html=True)
-                    st.caption("Yes Probability")
-                with c3:
-                    st.markdown(f"**{vol_str}**")
-                    st.caption("Volume")
-                st.markdown("---")
-
-        # Category breakdown chart
-        st.subheader("Category Breakdown")
-        cat_df = poly_df.groupby("category").agg({"volume": "sum", "question": "count"}).reset_index()
-        cat_df.columns = ["category", "volume", "count"]
-        fig = px.pie(cat_df, values="volume", names="category", hole=0.4,
-                     color_discrete_sequence=px.colors.qualitative.Set3)
-        fig.update_traces(textinfo="label+percent", textposition="outside")
-        fig.update_layout(showlegend=False, height=300)
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("No Polymarket data today.")
-
-
-# ---------- Kalshi Tab ----------
-with tab_kalshi:
-    st.header("Kalshi — Regulated US Prediction Market")
-    st.caption("Politics & economics focus, regulated exchange, US audience")
-
-    kal_df = df_today[df_today["platform"] == "kalshi"].sort_values("volume", ascending=False)
-
-    if not kal_df.empty:
-        # Market cards
-        for _, row in kal_df.iterrows():
-            price = row['yes_price']
-            price_color = "#2ca02c" if price > 0.6 else "#ff7f0e" if price > 0.4 else "#d62728"
-            vol_str = f"${row['volume']/1e6:.2f}M" if row['volume'] >= 1e6 else f"${row['volume']:,.0f}"
-
-            with st.container():
-                c1, c2, c3 = st.columns([4, 1.5, 1.5])
-                with c1:
-                    st.markdown(f"**{row['question'][:70]}**")
-                    st.caption(get_category_badge(row['category']))
-                with c2:
-                    st.markdown(f"<span style='color:{price_color};font-size:1.4rem;font-weight:bold;'>{price:.0%}</span>", unsafe_allow_html=True)
-                    st.caption("Yes Probability")
-                with c3:
-                    st.markdown(f"**{vol_str}**")
-                    st.caption("Volume")
-                st.markdown("---")
-
-        # Category breakdown chart
-        st.subheader("Category Breakdown")
-        cat_df = kal_df.groupby("category").agg({"volume": "sum", "question": "count"}).reset_index()
-        cat_df.columns = ["category", "volume", "count"]
-        fig = px.pie(cat_df, values="volume", names="category", hole=0.4,
-                     color_discrete_sequence=px.colors.qualitative.Pastel)
-        fig.update_traces(textinfo="label+percent", textposition="outside")
-        fig.update_layout(showlegend=False, height=300)
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("No Kalshi data today.")
-
-
-# ---------- Arbitrage Tab ----------
-with tab_arb:
-    st.header("Cross-Market Arbitrage Radar")
-    st.caption("Events with >5% price difference between platforms")
-
-    if not df_arb.empty:
-        for _, row in df_arb.iterrows():
-            spread = row["spread"]
-            spread_pct = spread * 100
-
-            if spread > 0.15:
-                severity, border_color, bg_color = "🔴 HIGH", "#d62728", "#ffebee"
-            elif spread > 0.08:
-                severity, border_color, bg_color = "🟠 MEDIUM", "#ff7f0e", "#fff3e0"
-            else:
-                severity, border_color, bg_color = "🟢 LOW", "#2ca02c", "#e8f5e9"
+    poly = df_markets[df_markets["platform"] == "polymarket"].sort_values("volume", ascending=False)
+    if not poly.empty:
+        for _, row in poly.iterrows():
+            price = row["yes_price"]
+            color = "#10b981" if price > 0.6 else "#f59e0b" if price > 0.4 else "#ef4444"
+            vol = f"${row['volume']/1e6:.2f}M" if row["volume"] >= 1e6 else f"${row['volume']:,.0f}"
 
             st.markdown(f"""
-            <div style="border-left: 6px solid {border_color}; background-color: {bg_color}; padding: 20px; border-radius: 8px; margin-bottom: 15px;">
-                <h3 style="margin:0 0 10px 0;">{severity} — {row['event_name'][:60]}</h3>
-                <div style="display:flex; align-items:center; gap:40px;">
-                    <div>
-                        <div style="font-size:0.9rem; color:#666;">Polymarket</div>
-                        <div style="font-size:2rem; font-weight:bold; color:#636EFA;">{row['poly_price']:.0%}</div>
+            <div style='background: linear-gradient(90deg, rgba(139,92,246,0.1), transparent);
+                border-left: 3px solid #8b5cf6; padding: 16px 20px; border-radius: 8px;
+                margin-bottom: 12px;'>
+                <div style='display:flex; justify-content:space-between; align-items:center;'>
+                    <div style='flex:1;'>
+                        <div style='font-size:1.1rem; font-weight:600; color:#f3f4f6; margin-bottom:4px;'>
+                            {row['question'][:70]}
+                        </div>
+                        <div style='font-size:0.85rem;'>{get_cat_badge(row['category'])}</div>
                     </div>
-                    <div style="font-size:1.5rem; color:#999;">vs</div>
-                    <div>
-                        <div style="font-size:0.9rem; color:#666;">Kalshi</div>
-                        <div style="font-size:2rem; font-weight:bold; color:#EF553B;">{row['kalshi_price']:.0%}</div>
+                    <div style='text-align:right; margin-left:24px;'>
+                        <div style='font-size:1.6rem; font-weight:700; color:{color}; font-family:"JetBrains Mono",monospace;'>
+                            {price:.0%}
+                        </div>
+                        <div style='font-size:0.75rem; color:#6b7280;'>Yes Price</div>
                     </div>
-                    <div style="margin-left:auto;">
-                        <div style="font-size:0.9rem; color:#666;">Spread</div>
-                        <div style="font-size:2rem; font-weight:bold; color:{border_color};">{spread_pct:.1f}%</div>
+                    <div style='text-align:right; margin-left:24px; min-width:100px;'>
+                        <div style='font-size:1.1rem; font-weight:600; color:#f3f4f6;'>{vol}</div>
+                        <div style='font-size:0.75rem; color:#6b7280;'>Volume</div>
                     </div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
 
-            with st.expander("💡 What this means"):
-                st.markdown(f"""
-                **Interpretation:**
-                - If you think the true probability is closer to **{row['poly_price']:.0%}** (Polymarket), Kalshi is underpriced
-                - If you think it's closer to **{row['kalshi_price']:.0%}** (Kalshi), Polymarket is overpriced
-                - ⚠️ Make sure the questions are **identical** before trading
+        # Donut chart
+        cat_df = poly.groupby("category").agg({"volume": "sum"}).reset_index()
+        fig = px.pie(cat_df, values="volume", names="category", hole=0.6,
+                     color_discrete_sequence=px.colors.sequential.Plasma_r)
+        fig.update_traces(textinfo="label+percent", textposition="outside",
+                          textfont=dict(color="#9ca3af"))
+        fig.update_layout(
+            showlegend=False, height=320,
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#9ca3af"),
+            annotations=[dict(text="Sectors", x=0.5, y=0.5, font_size=16,
+                              showarrow=False, font_color="#f3f4f6")]
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No Polymarket data today.")
 
-                **Potential profit (per $1,000):** ~${spread * 1000:.0f} (before fees)
+
+# ---------- Kalshi ----------
+with tab_kalshi:
+    st.markdown("<h2 style='color:#06b6d4;'>Kalshi</h2>", unsafe_allow_html=True)
+    st.caption("Regulated US exchange. Politics & economics focus.")
+
+    kal = df_markets[df_markets["platform"] == "kalshi"].sort_values("volume", ascending=False)
+    if not kal.empty:
+        for _, row in kal.iterrows():
+            price = row["yes_price"]
+            color = "#10b981" if price > 0.6 else "#f59e0b" if price > 0.4 else "#ef4444"
+            vol = f"${row['volume']/1e6:.2f}M" if row["volume"] >= 1e6 else f"${row['volume']:,.0f}"
+
+            st.markdown(f"""
+            <div style='background: linear-gradient(90deg, rgba(6,182,212,0.1), transparent);
+                border-left: 3px solid #06b6d4; padding: 16px 20px; border-radius: 8px;
+                margin-bottom: 12px;'>
+                <div style='display:flex; justify-content:space-between; align-items:center;'>
+                    <div style='flex:1;'>
+                        <div style='font-size:1.1rem; font-weight:600; color:#f3f4f6; margin-bottom:4px;'>
+                            {row['question'][:70]}
+                        </div>
+                        <div style='font-size:0.85rem;'>{get_cat_badge(row['category'])}</div>
+                    </div>
+                    <div style='text-align:right; margin-left:24px;'>
+                        <div style='font-size:1.6rem; font-weight:700; color:{color}; font-family:"JetBrains Mono",monospace;'>
+                            {price:.0%}
+                        </div>
+                        <div style='font-size:0.75rem; color:#6b7280;'>Yes Price</div>
+                    </div>
+                    <div style='text-align:right; margin-left:24px; min-width:100px;'>
+                        <div style='font-size:1.1rem; font-weight:600; color:#f3f4f6;'>{vol}</div>
+                        <div style='font-size:0.75rem; color:#6b7280;'>Volume</div>
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        cat_df = kal.groupby("category").agg({"volume": "sum"}).reset_index()
+        fig = px.pie(cat_df, values="volume", names="category", hole=0.6,
+                     color_discrete_sequence=px.colors.sequential.Cividis_r)
+        fig.update_traces(textinfo="label+percent", textposition="outside",
+                          textfont=dict(color="#9ca3af"))
+        fig.update_layout(
+            showlegend=False, height=320,
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#9ca3af"),
+            annotations=[dict(text="Sectors", x=0.5, y=0.5, font_size=16,
+                              showarrow=False, font_color="#f3f4f6")]
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No Kalshi data today.")
+
+
+# ---------- Arbitrage ----------
+with tab_arb:
+    st.markdown("<h2 style='color:#f59e0b;'>Cross-Market Arbitrage</h2>", unsafe_allow_html=True)
+    st.caption("Price divergence signals between Polymarket and Kalshi.")
+
+    if not df_arb.empty:
+        for _, row in df_arb.iterrows():
+            spread = row["spread"]
+            pct = spread * 100
+            if spread > 0.15:
+                severity, glow = "🔴 HIGH", "rgba(239,68,68,0.2)"
+                border = "#ef4444"
+            elif spread > 0.08:
+                severity, glow = "🟠 MEDIUM", "rgba(245,158,11,0.2)"
+                border = "#f59e0b"
+            else:
+                severity, glow = "🟢 LOW", "rgba(16,185,129,0.2)"
+                border = "#10b981"
+
+            st.markdown(f"""
+            <div style='background: linear-gradient(135deg, {glow}, transparent);
+                border: 1px solid {border}; padding: 24px; border-radius: 12px;
+                margin-bottom: 16px; box-shadow: 0 0 30px {glow};'>
+                <div style='font-size:0.85rem; color:{border}; font-weight:700; margin-bottom:8px;'>
+                    {severity}
+                </div>
+                <div style='font-size:1.2rem; font-weight:600; color:#f3f4f6; margin-bottom:16px;'>
+                    {row['event_name'][:60]}
+                </div>
+                <div style='display:flex; justify-content:space-between; align-items:center;'>
+                    <div style='text-align:center;'>
+                        <div style='font-size:0.8rem; color:#9ca3af; margin-bottom:4px;'>Polymarket</div>
+                        <div style='font-size:2rem; font-weight:700; color:#8b5cf6; font-family:"JetBrains Mono",monospace;'>
+                            {row['poly_price']:.0%}
+                        </div>
+                    </div>
+                    <div style='font-size:1.5rem; color:#4b5563;'>vs</div>
+                    <div style='text-align:center;'>
+                        <div style='font-size:0.8rem; color:#9ca3af; margin-bottom:4px;'>Kalshi</div>
+                        <div style='font-size:2rem; font-weight:700; color:#06b6d4; font-family:"JetBrains Mono",monospace;'>
+                            {row['kalshi_price']:.0%}
+                        </div>
+                    </div>
+                    <div style='text-align:center; margin-left:auto; padding-left:40px;'>
+                        <div style='font-size:0.8rem; color:#9ca3af; margin-bottom:4px;'>Spread</div>
+                        <div style='font-size:2.2rem; font-weight:800; color:{border}; font-family:"JetBrains Mono",monospace;'>
+                            {pct:.1f}%
+                        </div>
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            with st.expander("💡 Analysis"):
+                st.markdown(f"""
+                **Signal:** {severity} divergence detected.
+
+                - **Long bias:** If true probability ≈ {row['poly_price']:.0%}, Kalshi is undervalued.
+                - **Short bias:** If true probability ≈ {row['kalshi_price']:.0%}, Polymarket is overvalued.
+                - **Est. profit / $1k:** ~${spread*1000:.0f} (before fees & slippage)
+
+                ⚠️ Verify that both markets reference the **identical** underlying event before executing.
                 """)
     else:
-        st.success("✅ No significant arbitrage opportunities found today (spread < 5%)")
+        st.markdown("""
+        <div style='text-align:center; padding:60px 20px; color:#6b7280;'>
+            <div style='font-size:3rem; margin-bottom:16px;'>✅</div>
+            <div style='font-size:1.2rem; font-weight:600;'>No Arb Signals Today</div>
+            <div style='font-size:0.9rem;'>All tracked markets show &lt;5% cross-platform divergence.</div>
+        </div>
+        """, unsafe_allow_html=True)
 
-    # Platform volume comparison
+    # Volume comparison
     st.subheader("Platform Volume Comparison")
-    vol_data = []
-    for platform in ["polymarket", "kalshi"]:
-        vol = df_snap[df_snap["platform"] == platform]["volume"].sum()
-        vol_data.append({"Platform": platform.title(), "Volume": vol})
-    vol_df = pd.DataFrame(vol_data)
-    fig = px.bar(vol_df, x="Platform", y="Volume", color="Platform",
-                 color_discrete_map={"Polymarket": "#636EFA", "Kalshi": "#EF553B"},
-                 text=vol_df["Volume"].apply(lambda x: f"${x/1e6:.1f}M" if x >= 1e6 else f"${x:,.0f}"))
-    fig.update_traces(textposition="outside")
-    fig.update_layout(showlegend=False, height=350)
+    vdf = pd.DataFrame([
+        {"Platform": "Polymarket", "Volume": poly_vol, "color": "#8b5cf6"},
+        {"Platform": "Kalshi", "Volume": kal_vol, "color": "#06b6d4"},
+    ])
+    fig = px.bar(vdf, x="Platform", y="Volume", color="Platform",
+                 color_discrete_map={"Polymarket": "#8b5cf6", "Kalshi": "#06b6d4"},
+                 text=vdf["Volume"].apply(lambda x: f"${x/1e6:.1f}M" if x >= 1e6 else f"${x:,.0f}"))
+    fig.update_traces(textposition="outside", marker_line_width=0)
+    fig.update_layout(showlegend=False, height=350,
+                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                      font=dict(color="#9ca3af"), yaxis_gridcolor="#1f2937",
+                      xaxis_linecolor="#1f2937")
     st.plotly_chart(fig, use_container_width=True)
 
 
-# ---------- Insights Tab ----------
+# ---------- Insights ----------
 with tab_insights:
-    st.header("Market Insights")
+    st.markdown("<h2 style='color:#10b981;'>Market Intelligence</h2>", unsafe_allow_html=True)
 
     left, right = st.columns(2)
-
     with left:
-        st.subheader("🎯 Market Category Mix")
-        if not df_today.empty:
-            cat_df = df_today.groupby("category").agg({"volume": "sum", "question": "count"}).reset_index()
-            cat_df.columns = ["category", "total_volume", "market_count"]
+        st.subheader("Sector Heatmap")
+        if not df_markets.empty:
+            cdf = df_markets.groupby("category").agg({"volume": "sum", "question": "count"}).reset_index()
+            cdf.columns = ["category", "volume", "count"]
             fig = px.treemap(
-                cat_df, path=["category"], values="total_volume", color="total_volume",
-                color_continuous_scale="Blues", custom_data=["market_count"], height=400
+                cdf, path=["category"], values="volume", color="volume",
+                color_continuous_scale="Viridis", custom_data=["count"], height=400
             )
             fig.update_traces(
-                hovertemplate='<b>%{label}</b><br>Volume: $%{value:,.0f}<br>Markets: %{customdata[0]}',
-                texttemplate='%{label}<br>$%{value:,.0f}'
+                hovertemplate='<b>%{label}</b><br>Vol: $%{value:,.0f}<br>Markets: %{customdata[0]}',
+                texttemplate='%{label}<br>$%{value:,.0f}', textfont=dict(color="white")
             )
+            fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=10, r=10, t=10, b=10))
             st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Need data for category breakdown.")
 
     with right:
-        st.subheader("🐋 Whale Concentration")
-        df_whales = _demo_whales() if USE_DEMO else pd.DataFrame()
-        if not df_whales.empty:
-            fig = px.bar(
-                df_whales.sort_values("top5_pct", ascending=True),
-                x="top5_pct", y="question", orientation="h",
-                color="top5_pct", color_continuous_scale="Reds",
-                height=400, text=df_whales["top5_pct"].apply(lambda x: f"{x:.1f}%")
-            )
-            fig.update_traces(textposition="outside")
-            fig.update_layout(coloraxis_showscale=False, margin=dict(l=10, r=10, t=10, b=10))
-            st.plotly_chart(fig, use_container_width=True)
-            st.caption("High concentration (>60%) may suggest insider knowledge")
-        else:
-            st.info("No trade data yet. Run fetcher for several days.")
+        st.subheader("Whale Concentration")
+        st.info("Requires 3+ days of trade history. Run fetcher daily to populate.")
 
     st.divider()
-    st.subheader("🔗 Cross-Platform Price Correlation")
-    st.caption("How closely do platforms agree on the same event? (needs 2+ days of data)")
-    st.info("Correlation analysis requires the same event on both platforms across multiple days. Run fetcher daily to populate.")
-
-# Footer
-st.divider()
-st.caption(f"📅 Dashboard generated on {date.today()} | Data pipeline: v1.0")
+    st.caption(f"Alpha Terminal v1.0  |  Data: {date.today()}  |  QuantSignals Research")
 
 if conn:
     conn.close()
