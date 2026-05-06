@@ -297,14 +297,18 @@ def polymarket_fetch_trades(condition_id: str, limit: int = 500) -> List[dict]:
 
 # ============================================================
 # Kalshi fetchers (public endpoints, no key needed for basic data)
+# Base URL: https://api.elections.kalshi.com/trade-api/v2
 # ============================================================
 
-def kalshi_fetch_events(limit: int = 20) -> List[dict]:
-    """Fetch active Kalshi events. Public endpoint, no key required."""
+KALSHI_API = "https://api.elections.kalshi.com/trade-api/v2"
+
+
+def kalshi_fetch_events(limit: int = 200) -> List[dict]:
+    """Fetch Kalshi events for titles/categories."""
     try:
         resp = requests.get(
-            "https://api.elections.kalshi.com/public/events",
-            params={"limit": limit, "status": "active"},
+            f"{KALSHI_API}/events",
+            params={"limit": limit},
             timeout=20,
         )
         resp.raise_for_status()
@@ -315,87 +319,89 @@ def kalshi_fetch_events(limit: int = 20) -> List[dict]:
         return []
 
 
-def kalshi_fetch_market(external_id: str) -> Optional[dict]:
-    """Fetch a single Kalshi market (series) details."""
+def kalshi_fetch_event_detail(event_ticker: str) -> Optional[dict]:
+    """Fetch event detail including markets."""
     try:
         resp = requests.get(
-            f"https://api.elections.kalshi.com/public/series/{external_id}",
+            f"{KALSHI_API}/events/{event_ticker}",
             timeout=20,
         )
         resp.raise_for_status()
         return resp.json()
     except Exception as e:
-        print(f"[Kalshi] Failed to fetch market {external_id}: {e}")
+        print(f"[Kalshi] Failed to fetch event {event_ticker}: {e}")
         return None
 
 
+def _kalshi_market_to_dict(m: dict, event: dict) -> dict:
+    """Convert raw Kalshi market JSON to our standard format."""
+    yes_ask = float(m.get("yes_ask_dollars", 0) or 0)
+    yes_bid = float(m.get("yes_bid_dollars", 0) or 0)
+    volume = float(m.get("volume_fp", 0) or 0)
+    return {
+        "external_id": m.get("ticker", ""),
+        "slug": m.get("ticker", ""),
+        "question": event.get("title", m.get("title", "")),
+        "category": event.get("category", ""),
+        "outcomes": ["Yes", "No"],
+        "outcome_prices": [yes_ask, 1 - yes_ask],
+        "volume": volume,
+        "liquidity": float(m.get("liquidity_dollars", 0) or 0),
+        "active": m.get("status") == "active",
+        "closed": m.get("status") in ("closed", "settled"),
+        "end_date": m.get("close_time"),
+        "best_bid": yes_bid,
+        "best_ask": yes_ask,
+    }
+
+
 def kalshi_search_markets(keywords: List[str], limit: int = 50) -> List[dict]:
-    """Search Kalshi markets by keyword."""
-    events = kalshi_fetch_events(limit)
+    """Search Kalshi markets by keyword via events."""
+    events = kalshi_fetch_events(limit=200)
     kw_lower = [k.lower() for k in keywords]
     matches = []
     for ev in events:
         title = (ev.get("title") or "").lower()
         if any(kw in title for kw in kw_lower):
-            ticker = ev.get("ticker", "")
-            detail = kalshi_fetch_market(ticker)
+            detail = kalshi_fetch_event_detail(ev.get("event_ticker", ""))
             time.sleep(REQUEST_DELAY)
             if detail:
-                series = detail.get("series", {})
-                markets = series.get("markets", [])
-                if markets:
-                    m = markets[0]
-                    yes_price = m.get("yes_ask", 0) / 100 if m.get("yes_ask") else 0
-                    matches.append({
-                        "external_id": ticker,
-                        "slug": ticker,
-                        "question": ev.get("title", ""),
-                        "category": ev.get("category", ""),
-                        "outcomes": ["Yes", "No"],
-                        "outcome_prices": [yes_price, 1 - yes_price],
-                        "volume": float(series.get("volume", 0) or 0),
-                        "liquidity": 0,
-                        "active": True,
-                        "closed": False,
-                        "end_date": series.get("close_date"),
-                        "best_bid": float(m.get("yes_bid", 0) or 0) / 100,
-                        "best_ask": float(m.get("yes_ask", 0) or 0) / 100,
-                    })
+                for m in detail.get("markets", []):
+                    matches.append(_kalshi_market_to_dict(m, ev))
+            if len(matches) >= limit:
+                break
     return matches
 
 
 def kalshi_top_markets(limit: int = 5) -> List[dict]:
-    """Fetch top Kalshi markets by volume."""
-    events = kalshi_fetch_events(limit * 3)
-    events.sort(key=lambda e: float(e.get("volume", 0) or 0), reverse=True)
+    """Fetch top Kalshi markets by volume via events."""
+    events = kalshi_fetch_events(limit=200)
+    # Fetch markets for a diverse sample of events, then sort by volume
+    # Prioritize: Politics, Economics, World, then others
+    category_priority = {"Politics": 0, "Elections": 1, "Economics": 2, "World": 3, "Financials": 4, "Companies": 5, "Entertainment": 6, "Sports": 7}
+    events.sort(
+        key=lambda e: (category_priority.get(e.get("category", ""), 99), e.get("last_updated_ts", "")),
+        reverse=False,
+    )
 
-    result = []
-    for ev in events[:limit]:
-        ticker = ev.get("ticker", "")
-        detail = kalshi_fetch_market(ticker)
+    all_markets = []
+    seen_events = set()
+    for ev in events[:40]:  # Check first 40 diverse events
+        detail = kalshi_fetch_event_detail(ev.get("event_ticker", ""))
         time.sleep(REQUEST_DELAY)
         if detail:
-            series = detail.get("series", {})
-            markets = series.get("markets", [])
+            event_title = ev.get("title", "")
+            if event_title in seen_events:
+                continue
+            seen_events.add(event_title)
+            markets = detail.get("markets", [])
             if markets:
-                m = markets[0]
-                yes_price = m.get("yes_ask", 0) / 100 if m.get("yes_ask") else 0
-                result.append({
-                    "external_id": ticker,
-                    "slug": ticker,
-                    "question": ev.get("title", ""),
-                    "category": ev.get("category", ""),
-                    "outcomes": ["Yes", "No"],
-                    "outcome_prices": [yes_price, 1 - yes_price],
-                    "volume": float(series.get("volume", 0) or 0),
-                    "liquidity": 0,
-                    "active": True,
-                    "closed": False,
-                    "end_date": series.get("close_date"),
-                    "best_bid": float(m.get("yes_bid", 0) or 0) / 100,
-                    "best_ask": float(m.get("yes_ask", 0) or 0) / 100,
-                })
-    return result
+                # Pick the first market as representative of the event
+                all_markets.append(_kalshi_market_to_dict(markets[0], ev))
+
+    # Sort by volume and return top N
+    all_markets.sort(key=lambda m: m.get("volume", 0), reverse=True)
+    return all_markets[:limit]
 
 
 # ============================================================

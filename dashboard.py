@@ -181,7 +181,7 @@ with col3:
     st.metric("Avg Spread", f"{avg_spread:.1f}%")
 with col4:
     latest_date = df_snap["snapshot_date"].max().date() if not df_snap.empty else date.today()
-    st.metric("Latest Data", latest_date)
+    st.metric("Latest Data", str(latest_date))
 
 st.divider()
 
