@@ -62,21 +62,31 @@ st.markdown("""
 
     /* Custom metric cards */
     div[data-testid="metric-container"] {
-        background: linear-gradient(145deg, var(--bg-card), var(--bg-elevated)) !important;
-        border: 1px solid var(--border) !important;
+        background: linear-gradient(145deg, #1a2236, #111827) !important;
+        border: 1px solid #374151 !important;
         border-radius: 12px !important;
-        padding: 16px !important;
-        box-shadow: 0 4px 6px -1px rgba(0,0,0,0.3) !important;
+        padding: 20px !important;
+        box-shadow: 0 0 15px rgba(6, 182, 212, 0.15) !important;
+    }
+
+    div[data-testid="metric-container"] label {
+        color: #9ca3af !important;
+        font-size: 0.85rem !important;
+        font-weight: 600 !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.05em !important;
     }
 
     div[data-testid="metric-container"] > div {
-        color: var(--text-secondary) !important;
+        color: #f3f4f6 !important;
     }
 
     div[data-testid="metric-container"] > div > div {
-        color: var(--accent-cyan) !important;
+        color: #06b6d4 !important;
         font-family: 'JetBrains Mono', monospace !important;
-        font-weight: 700 !important;
+        font-weight: 800 !important;
+        font-size: 1.6rem !important;
+        text-shadow: 0 0 10px rgba(6, 182, 212, 0.4) !important;
     }
 
     /* Tabs styling */
