@@ -1,7 +1,8 @@
 """
-Add a specific Polymarket market to the database
+Add a specific Polymarket market or event to the database
 Usage:
     python add_market.py https://polymarket.com/event/will-spy-close-up
+    python add_market.py https://polymarket.com/market/will-spy-close-up
     python add_market.py will-spy-close-up
 """
 
@@ -27,10 +28,26 @@ def extract_slug(url_or_slug: str) -> str:
     return url_or_slug.strip()
 
 
-def fetch_by_slug(slug: str):
+def fetch_event_by_slug(slug: str):
+    """Fetch event by slug from Polymarket."""
+    try:
+        resp = requests.get(
+            f"{GAMMA_API}/events",
+            params={"slug": slug, "active": "true", "closed": "false"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        events = resp.json()
+        if events and len(events) > 0:
+            return events[0]
+    except Exception as e:
+        print(f"[Event Search] {e}")
+    return None
+
+
+def fetch_market_by_slug(slug: str):
     """Fetch single market by slug from Polymarket."""
     try:
-        # Try direct slug match in listing
         resp = requests.get(
             f"{GAMMA_API}/markets",
             params={"active": "true", "closed": "false", "limit": 500},
@@ -42,31 +59,12 @@ def fetch_by_slug(slug: str):
             if m.get("slug") == slug or slug in (m.get("slug") or ""):
                 return m
     except Exception as e:
-        print(f"[Search] {e}")
+        print(f"[Market Search] {e}")
     return None
 
 
-def main():
-    if len(sys.argv) < 2:
-        print("Usage: python add_market.py <polymarket_url_or_slug>")
-        print("Examples:")
-        print('  python add_market.py https://polymarket.com/event/will-spy-close-up')
-        print('  python add_market.py will-spy-close-up')
-        sys.exit(1)
-
-    raw = sys.argv[1]
-    slug = extract_slug(raw)
-    print(f"🔍 Searching Polymarket for: {slug}")
-
-    market = fetch_by_slug(slug)
-    if not market:
-        print("❌ Market not found. It may be closed or the slug is incorrect.")
-        sys.exit(1)
-
-    print(f"✅ Found: {market['question']}")
-    print(f"   Volume: ${float(market.get('volume',0) or 0):,.0f}")
-
-    # Parse JSON fields
+def save_market_to_db(conn, market: dict):
+    """Parse and save a single market dict to the database."""
     try:
         prices = json.loads(market.get("outcomePrices", "[]")) if market.get("outcomePrices") else []
         outcomes = json.loads(market.get("outcomes", "[]")) if market.get("outcomes") else []
@@ -75,14 +73,14 @@ def main():
         outcomes = []
 
     data = {
-        "external_id": market["conditionId"],
+        "external_id": market.get("conditionId") or market.get("id"),
         "slug": market.get("slug"),
-        "question": market["question"],
+        "question": market.get("question") or market.get("title"),
         "category": market.get("category") or "Financials",
         "outcomes": outcomes,
         "outcome_prices": prices,
         "volume": float(market.get("volume", 0) or 0),
-        "liquidity": float(market.get("liquidityNum", 0) or 0),
+        "liquidity": float(market.get("liquidityNum", market.get("liquidity", 0)) or 0),
         "active": market.get("active", True),
         "closed": market.get("closed", False),
         "end_date": market.get("endDate"),
@@ -90,7 +88,6 @@ def main():
         "best_ask": float(market.get("bestAsk", 0) or 0),
     }
 
-    conn = get_db_conn()
     market_id = upsert_market(conn, "polymarket", data)
     if market_id:
         snapshot = {
@@ -103,13 +100,67 @@ def main():
             "best_ask": data.get("best_ask", 0),
         }
         insert_snapshot(conn, market_id, snapshot)
-        print(f"✅ Saved to database (market_id={market_id})")
-        print("   Refresh your Dashboard to see it!")
-    else:
-        print("❌ Failed to save to database.")
+        return market_id
+    return None
 
-    if conn:
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: python add_market.py <polymarket_url_or_slug>")
+        print("Examples:")
+        print('  python add_market.py https://polymarket.com/event/will-spy-close-up')
+        print('  python add_market.py https://polymarket.com/market/will-spy-close-up')
+        print('  python add_market.py will-spy-close-up')
+        sys.exit(1)
+
+    raw = sys.argv[1]
+    slug = extract_slug(raw)
+    print(f"🔍 Searching Polymarket for: {slug}")
+
+    # Try event first
+    event = fetch_event_by_slug(slug)
+    if event:
+        print(f"✅ Found Event: {event.get('title')}")
+        markets = event.get("markets", [])
+        if not markets:
+            print("⚠️  Event has no markets.")
+            sys.exit(1)
+
+        print(f"   Contains {len(markets)} market(s). Saving all...\n")
+        conn = get_db_conn()
+        saved = 0
+        for m in markets:
+            q = m.get("question") or m.get("title")
+            print(f"   → {q}")
+            mid = save_market_to_db(conn, m)
+            if mid:
+                print(f"      ✅ Saved (market_id={mid})")
+                saved += 1
+            else:
+                print(f"      ❌ Failed to save")
+
         conn.close()
+        print(f"\n🎉 Done! {saved}/{len(markets)} markets saved.")
+        print("   Refresh your Dashboard to see them!")
+        return
+
+    # Fallback to single market
+    market = fetch_market_by_slug(slug)
+    if market:
+        print(f"✅ Found: {market.get('question')}")
+        print(f"   Volume: ${float(market.get('volume', 0) or 0):,.0f}")
+        conn = get_db_conn()
+        market_id = save_market_to_db(conn, market)
+        if market_id:
+            print(f"✅ Saved to database (market_id={market_id})")
+            print("   Refresh your Dashboard to see it!")
+        else:
+            print("❌ Failed to save to database.")
+        conn.close()
+        return
+
+    print("❌ Market/Event not found. It may be closed or the slug is incorrect.")
+    sys.exit(1)
 
 
 if __name__ == "__main__":

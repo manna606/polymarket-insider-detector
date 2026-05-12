@@ -213,7 +213,7 @@ def polymarket_search_markets(keywords: List[str], limit: int = 50) -> List[dict
     kw_lower = [k.lower() for k in keywords]
     for m in markets:
         q = (m.get("question") or "").lower()
-        if any(kw in q for kw in kw_lower):
+        if not keywords or any(kw in q for kw in kw_lower):
             try:
                 prices = json.loads(m.get("outcomePrices", "[]")) if m.get("outcomePrices") else []
                 outcomes = json.loads(m.get("outcomes", "[]")) if m.get("outcomes") else []
@@ -440,17 +440,29 @@ def run_fetcher():
     for m in kalshi_top:
         print(f"     • {m['question'][:60]} | Vol: ${m['volume']:,.0f}")
 
+    # ---- 2.5) Fetch top active Polymarket markets for Breaking News auto-discovery ----
+    print("\n[2.5/4] Fetching top active Polymarket markets for Breaking News...")
+    poly_active = polymarket_search_markets([], limit=500)
+    poly_active.sort(key=lambda m: m.get("volume", 0), reverse=True)
+    poly_active = poly_active[:120]
+    print(f"   Active markets fetched: {len(poly_active)}")
+
     # ---- 3) Store in DB ----
     print("\n[3/4] Saving to database...")
-    all_markets = equity_markets + kalshi_equity + poly_top + kalshi_top
+    all_markets = equity_markets + kalshi_equity + poly_top + kalshi_top + poly_active
     # Deduplicate by platform + external_id
     seen = set()
     unique_markets = []
     for m in all_markets:
-        key = ("polymarket" if m in (equity_markets + poly_top) else "kalshi", m["external_id"])
+        # Determine platform by checking which source lists contain the market
+        if m in kalshi_equity or m in kalshi_top:
+            platform = "kalshi"
+        else:
+            platform = "polymarket"
+        key = (platform, m["external_id"])
         if key not in seen:
             seen.add(key)
-            unique_markets.append((key[0], m))
+            unique_markets.append((platform, m))
 
     stored_count = 0
     for platform, m in unique_markets:
